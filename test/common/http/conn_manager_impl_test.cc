@@ -492,7 +492,7 @@ TEST_F(HttpConnectionManagerImplTest, NoPath) {
   Buffer::OwnedImpl fake_input("1234");
   conn_manager_->onData(fake_input);
 }
-#if 0
+
 TEST_F(HttpConnectionManagerImplTest, RejectWebSocketOnNonWebSocketRoute) {
   setup(false, "");
   StreamDecoder* decoder = nullptr;
@@ -543,7 +543,6 @@ TEST_F(HttpConnectionManagerImplTest, RejectNonWebSocketOnWebSocketRoute) {
   Buffer::OwnedImpl fake_input("1234");
   conn_manager_->onData(fake_input);
 }
-#endif
 
 TEST_F(HttpConnectionManagerImplTest, DrainClose) {
   setup(true, "");

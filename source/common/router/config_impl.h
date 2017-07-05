@@ -314,6 +314,7 @@ private:
   const bool auto_host_rewrite_;
   const std::string cluster_name_;
   const Http::LowerCaseString cluster_header_name_;
+  const std::string cluster_url_param_;
   const std::chrono::milliseconds timeout_;
   const Optional<RuntimeData> runtime_;
   Runtime::Loader& loader_;

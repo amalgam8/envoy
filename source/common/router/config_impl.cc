@@ -77,6 +77,7 @@ RouteEntryImplBase::RouteEntryImplBase(const VirtualHostImpl& vhost, const Json:
       auto_host_rewrite_(route.getBoolean("auto_host_rewrite", false)),
       cluster_name_(route.getString("cluster", "")),
       cluster_header_name_(route.getString("cluster_header", "")),
+      cluster_url_param_(route.getString("cluster_url_param", "")),
       timeout_(route.getInteger("timeout_ms", DEFAULT_ROUTE_TIMEOUT_MS)),
       runtime_(loadRuntimeData(route)), loader_(loader),
       host_redirect_(route.getString("host_redirect", "")),
@@ -107,6 +108,20 @@ RouteEntryImplBase::RouteEntryImplBase(const VirtualHostImpl& vhost, const Json:
     if ((!cluster_name_.empty() + !cluster_header_name_.get().empty() + have_weighted_clusters) !=
         1) {
       throw EnvoyException("routes must specify one of cluster/cluster_header/weighted_clusters");
+    }
+  }
+
+  // cluster_url_param is valid only if cluster_header is set to :path
+  if (!cluster_url_param_.empty()) {
+    if (cluster_header_name_.get().empty()) {
+      throw EnvoyException("cluster_url_param can be used with only with cluster_header");
+    } else if (!StringUtil::caseInsensitiveCompare(cluster_header_name_.get().c_str(),
+                                                   Headers::get().Path.get().c_str())) {
+      throw EnvoyException("cluster_url_param can be used with when cluster_header is set to :path");
+    } else {
+      // Small optimization. Append a = to the url param, so that we can do a single search
+      // on the URL param string
+      cluster_url_param_.append("=");
     }
   }
 
@@ -277,6 +292,30 @@ const RouteEntry* RouteEntryImplBase::routeEntry() const {
   }
 }
 
+// TODO (shriram): This is not foolproof. Need to account for various URI schemes
+std::string urlParamValue(const std::string &url, const std::string &param_name) {
+  size_t index
+  std::string ret;
+
+  // pre-allocate memory
+  ret.reserve(url.length());
+  index = url.find('?');
+  if (index != std::string::npos) {
+    index = url.find(param_name, index);
+    if (index != std::string::npos) {
+      // copy value
+      for (index += param_name.length(), index < url.length(); index++) {
+        if (url[index] != '&' && url[index] != '#') {
+          ret += url[index];
+        }
+      }
+      return ret;
+    }
+  }
+
+  return EMPTY_STRING;
+}
+
 RouteConstSharedPtr RouteEntryImplBase::clusterEntry(const Http::HeaderMap& headers,
                                                      uint64_t random_value) const {
   // Gets the route object chosen from the list of weighted clusters
@@ -290,6 +329,11 @@ RouteConstSharedPtr RouteEntryImplBase::clusterEntry(const Http::HeaderMap& head
       std::string final_cluster_name;
       if (entry) {
         final_cluster_name = entry->value().c_str();
+        // extract the cluster name from the specified URL param
+        if (!cluster_url_param_.empty()) {
+          final_cluster_name = urlParamValue(entry->value(), cluster_url_param_);
+          ASSERT(!final_cluster_name.empty());
+        }
       }
 
       // NOTE: Though we return a shared_ptr here, the current ownership model assumes that

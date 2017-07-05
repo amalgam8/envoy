@@ -790,6 +790,79 @@ TEST(RouteMatcherTest, ClusterHeader) {
   }
 }
 
+TEST(RouteMatcherTest, ClusterUrlParam) {
+  std::string json = R"EOF(
+{
+  "virtual_hosts": [
+    {
+      "name": "local_service",
+      "domains": ["*"],
+      "routes": [
+        {
+          "prefix": "/foo",
+          "cluster_header": ":path",
+          "cluster_url_param": "scooby"
+        },
+        {
+          "prefix": "/bar",
+          "cluster_header": "some_header",
+          "timeout_ms": 0
+        }
+      ]
+    }
+  ]
+}
+  )EOF";
+
+  Json::ObjectSharedPtr loader = Json::Factory::loadFromString(json);
+  NiceMock<Runtime::MockLoader> runtime;
+  NiceMock<Upstream::MockClusterManager> cm;
+  ConfigImpl config(*loader, runtime, cm, true);
+
+  EXPECT_FALSE(config.usesRuntime());
+
+  EXPECT_EQ(
+      "doo",
+      config.route(genHeaders("some_cluster", "/foo?shaggy=1&scooby=doo", "GET"), 0)->routeEntry()->clusterName());
+
+  EXPECT_EQ(
+      "dooby",
+      config.route(genHeaders("some_cluster", "/foo?scooby=dooby", "GET"), 0)->routeEntry()->clusterName());
+
+  EXPECT_EQ(
+      "scrapy",
+      config.route(genHeaders("some_cluster", "/foo?scooby=scrappy#123", "GET"), 0)->routeEntry()->clusterName());
+
+  EXPECT_EQ(
+      "", config.route(genHeaders("www.lyft.com", "/bar", "GET"), 0)->routeEntry()->clusterName());
+}
+
+TEST(RouteMatcherTest, ClusterUrlParamInvalidClusterHeader) {
+  std::string json = R"EOF(
+{
+  "virtual_hosts": [
+    {
+      "name": "local_service",
+      "domains": ["*"],
+      "routes": [
+        {
+          "prefix": "/foo",
+          "cluster_header": "some_header",
+          "cluster_url_param": "some_param_name"
+        }
+      ]
+    }
+  ]
+}
+  )EOF";
+
+  Json::ObjectSharedPtr loader = Json::Factory::loadFromString(json);
+  NiceMock<Runtime::MockLoader> runtime;
+  NiceMock<Upstream::MockClusterManager> cm;
+  ConfigImpl config(*loader, runtime, cm, true);
+  EXPECT_THROW(ConfigImpl(*loader, runtime, cm, true), EnvoyException);
+}
+
 TEST(RouteMatcherTest, ContentType) {
   std::string json = R"EOF(
 {

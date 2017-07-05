@@ -220,6 +220,7 @@ private:
   Http::StreamDecoderFilterCallbacks* callbacks_{};
   RouteConstSharedPtr route_;
   const RouteEntry* route_entry_{};
+  std::string cluster_name_;
   Upstream::ClusterInfoConstSharedPtr cluster_;
   std::string alt_stat_prefix_;
   const VirtualCluster* request_vcluster_;

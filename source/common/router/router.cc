@@ -138,6 +138,8 @@ void Filter::chargeUpstreamCode(Http::Code code,
   chargeUpstreamCode(fake_response_headers, upstream_host);
 }
 
+static const std::string default_cluster_name_ = "__default__";
+
 Http::FilterHeadersStatus Filter::decodeHeaders(Http::HeaderMap& headers, bool end_stream) {
   downstream_headers_ = &headers;
 
@@ -168,10 +170,17 @@ Http::FilterHeadersStatus Filter::decodeHeaders(Http::HeaderMap& headers, bool e
 
   // A route entry matches for the request.
   route_entry_ = route_->routeEntry();
-  Upstream::ThreadLocalCluster* cluster = config_.cm_.get(route_entry_->clusterName());
+  cluster_name_ = route_entry_->clusterName();
+  Upstream::ThreadLocalCluster* cluster = config_.cm_.get(cluster_name_);
+  if (!cluster) {
+    // try the default cluster
+    cluster_name_ = default_cluster_name_;
+    cluster = config_.cm_.get(cluster_name_);
+  }
+
   if (!cluster) {
     config_.stats_.no_cluster_.inc();
-    ENVOY_STREAM_LOG(debug, "unknown cluster '{}'", *callbacks_, route_entry_->clusterName());
+    ENVOY_STREAM_LOG(debug, "unknown cluster '{}'", *callbacks_, cluster_name_);
 
     callbacks_->requestInfo().setResponseFlag(Http::AccessLog::ResponseFlag::NoRouteFound);
     Http::HeaderMapPtr response_headers{new Http::HeaderMapImpl{
@@ -184,7 +193,7 @@ Http::FilterHeadersStatus Filter::decodeHeaders(Http::HeaderMap& headers, bool e
   // Set up stat prefixes, etc.
   request_vcluster_ = route_entry_->virtualCluster(headers);
   ENVOY_STREAM_LOG(debug, "cluster '{}' match for URL '{}'", *callbacks_,
-                   route_entry_->clusterName(), headers.Path()->value().c_str());
+                   cluster_name_, headers.Path()->value().c_str());
 
   const Http::HeaderEntry* request_alt_name = headers.EnvoyUpstreamAltStatName();
   if (request_alt_name) {
@@ -256,7 +265,7 @@ Http::FilterHeadersStatus Filter::decodeHeaders(Http::HeaderMap& headers, bool e
 }
 
 Http::ConnectionPool::Instance* Filter::getConnPool() {
-  return config_.cm_.httpConnPoolForCluster(route_entry_->clusterName(), finalPriority(),
+  return config_.cm_.httpConnPoolForCluster(cluster_name_, finalPriority(),
                                             lb_context_.get());
 }
 

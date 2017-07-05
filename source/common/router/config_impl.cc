@@ -114,14 +114,10 @@ RouteEntryImplBase::RouteEntryImplBase(const VirtualHostImpl& vhost, const Json:
   // cluster_url_param is valid only if cluster_header is set to :path
   if (!cluster_url_param_.empty()) {
     if (cluster_header_name_.get().empty()) {
-      throw EnvoyException("cluster_url_param can be used with only with cluster_header");
-    } else if (!StringUtil::caseInsensitiveCompare(cluster_header_name_.get().c_str(),
-                                                   Headers::get().Path.get().c_str())) {
-      throw EnvoyException("cluster_url_param can be used with when cluster_header is set to :path");
-    } else {
-      // Small optimization. Append a = to the url param, so that we can do a single search
-      // on the URL param string
-      cluster_url_param_.append("=");
+      throw EnvoyException("cluster_url_param can be used only when cluster_header is used");
+    } else if (StringUtil::caseInsensitiveCompare(cluster_header_name_.get().c_str(),
+                                                   Http::Headers::get().Path.get().c_str())) {
+      throw EnvoyException("cluster_url_param requires cluster_header to be set to :path");
     }
   }
 
@@ -294,19 +290,23 @@ const RouteEntry* RouteEntryImplBase::routeEntry() const {
 
 // TODO (shriram): This is not foolproof. Need to account for various URI schemes
 std::string urlParamValue(const std::string &url, const std::string &param_name) {
-  size_t index
+  size_t index;
   std::string ret;
+  // TODO (shriram): get rid of the new string creation
+  std::string prefix = param_name + "=";
 
   // pre-allocate memory
   ret.reserve(url.length());
   index = url.find('?');
   if (index != std::string::npos) {
-    index = url.find(param_name, index);
+    index = url.find(prefix, index);
     if (index != std::string::npos) {
       // copy value
-      for (index += param_name.length(), index < url.length(); index++) {
+      for (index += prefix.length(); index < url.length(); index++) {
         if (url[index] != '&' && url[index] != '#') {
           ret += url[index];
+        } else {
+          break;
         }
       }
       return ret;
@@ -331,7 +331,7 @@ RouteConstSharedPtr RouteEntryImplBase::clusterEntry(const Http::HeaderMap& head
         final_cluster_name = entry->value().c_str();
         // extract the cluster name from the specified URL param
         if (!cluster_url_param_.empty()) {
-          final_cluster_name = urlParamValue(entry->value(), cluster_url_param_);
+          final_cluster_name = urlParamValue(entry->value().c_str(), cluster_url_param_);
           ASSERT(!final_cluster_name.empty());
         }
       }

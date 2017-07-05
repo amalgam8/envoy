@@ -823,14 +823,14 @@ TEST(RouteMatcherTest, ClusterUrlParam) {
 
   EXPECT_EQ(
       "doo",
-      config.route(genHeaders("some_cluster", "/foo?shaggy=1&scooby=doo", "GET"), 0)->routeEntry()->clusterName());
+      config.route(genHeaders("some_cluster", "/foo?shaggy=1&scooby=doo&wilma=1", "GET"), 0)->routeEntry()->clusterName());
 
   EXPECT_EQ(
       "dooby",
       config.route(genHeaders("some_cluster", "/foo?scooby=dooby", "GET"), 0)->routeEntry()->clusterName());
 
   EXPECT_EQ(
-      "scrapy",
+      "scrappy",
       config.route(genHeaders("some_cluster", "/foo?scooby=scrappy#123", "GET"), 0)->routeEntry()->clusterName());
 
   EXPECT_EQ(
@@ -859,7 +859,6 @@ TEST(RouteMatcherTest, ClusterUrlParamInvalidClusterHeader) {
   Json::ObjectSharedPtr loader = Json::Factory::loadFromString(json);
   NiceMock<Runtime::MockLoader> runtime;
   NiceMock<Upstream::MockClusterManager> cm;
-  ConfigImpl config(*loader, runtime, cm, true);
   EXPECT_THROW(ConfigImpl(*loader, runtime, cm, true), EnvoyException);
 }
 

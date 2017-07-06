@@ -10,6 +10,7 @@
 #include "envoy/event/dispatcher.h"
 #include "envoy/event/timer.h"
 #include "envoy/network/drain_decision.h"
+#include  "envoy/router/router.h"
 #include "envoy/ssl/connection.h"
 #include "envoy/stats/stats.h"
 #include "envoy/tracing/http_tracer.h"
@@ -51,11 +52,12 @@ ConnectionManagerImpl::ConnectionManagerImpl(ConnectionManagerConfig& config,
                                              Network::DrainDecision& drain_close,
                                              Runtime::RandomGenerator& random_generator,
                                              Tracing::HttpTracer& tracer, Runtime::Loader& runtime,
-                                             const LocalInfo::LocalInfo& local_info)
+                                             const LocalInfo::LocalInfo& local_info,
+                                             Upstream::ClusterManager& cm)
     : config_(config), stats_(config_.stats()),
       conn_length_(stats_.named_.downstream_cx_length_ms_.allocateSpan()),
       drain_close_(drain_close), random_generator_(random_generator), tracer_(tracer),
-      runtime_(runtime), local_info_(local_info) {}
+      runtime_(runtime), local_info_(local_info), cm_(cm){}
 
 void ConnectionManagerImpl::initializeReadFilterCallbacks(Network::ReadFilterCallbacks& callbacks) {
   read_callbacks_ = &callbacks;
@@ -466,30 +468,59 @@ void ConnectionManagerImpl::ActiveStream::decodeHeaders(HeaderMapPtr&& headers, 
     cached_route_.value(snapped_route_config_->route(*request_headers_, stream_id_));
   }
 
-  const Router::RouteEntry* route_entry = cached_route_.value()->routeEntry();
-  bool isWsRoute = (route_entry != nullptr) && route_entry->isWebSocket();
-  bool isWsConnection = (request_headers_->Connection() && request_headers_->Upgrade() &&
-                         (0 == StringUtil::caseInsensitiveCompare(
-                                   request_headers_->Connection()->value().c_str(),
-                                   Http::Headers::get().ConnectionValues.Upgrade.c_str())) &&
-                         (0 == StringUtil::caseInsensitiveCompare(
-                                   request_headers_->Upgrade()->value().c_str(),
-                                   Http::Headers::get().UpgradeValues.WebSocket.c_str())));
+  // If route doesn't exist, we fall through to the http connection manager filter where a 404 would
+  // be sent, and stats recorded.
+  if (cached_route_.value()) {
+    const Router::RouteEntry *route_entry = cached_route_.value()->routeEntry();
+    // Websocket route entries cannot be redirects.
+    bool isWsRoute = (route_entry != nullptr) && route_entry->isWebSocket();
+    bool isWsConnection = (request_headers_->Connection() && request_headers_->Upgrade() &&
+        (0 == StringUtil::caseInsensitiveCompare(
+            request_headers_->Connection()->value().c_str(),
+            Http::Headers::get().ConnectionValues.Upgrade.c_str())) &&
+        (0 == StringUtil::caseInsensitiveCompare(
+            request_headers_->Upgrade()->value().c_str(),
+            Http::Headers::get().UpgradeValues.WebSocket.c_str())));
 
-  if (isWsConnection && isWsRoute) {
-    // TODO: Create WsHandlerImpl
-    ASSERT(false);
-  } else if (isWsConnection || isWsRoute) {
-    if (isWsConnection) {
-      // Do not allow WebSocket upgrades if the route does not support it.
-      connection_manager_.stats_.named_.downstream_rq_ws_on_non_ws_route_.inc();
-    } else {
-      // Do not allow normal connections on WebSocket routes.
-      connection_manager_.stats_.named_.downstream_rq_non_ws_on_ws_route_.inc();
+    if (isWsConnection && isWsRoute) {
+      connection_manager_.websocket_ = true;
+      Upstream::ThreadLocalCluster* cluster = connection_manager_.cm_.get(route_entry->clusterName());
+      if (!cluster) {
+        //config_.stats_.no_cluster_.inc();
+        //ENVOY_STREAM_LOG(debug, "unknown cluster '{}'", *callbacks_, route_entry_->clusterName());
+
+        request_info_.setResponseFlag(Http::AccessLog::ResponseFlag::NoRouteFound);
+        HeaderMapImpl headers{{Headers::get().Status, std::to_string(enumToInt(Http::Code::NotFound))}};
+        encodeHeaders(nullptr, headers, true);
+        return;
+      }
+
+      Upstream::Host::CreateConnectionData conn_data = connection_manager_.cm_.tcpConnForCluster(route_entry->clusterName());
+      connection_manager_.ws_connection_ = std::move(conn_data.connection_);
+      connection_manager_.read_callbacks_->upstreamHost(conn_data.host_description_);
+      if (!connection_manager_.ws_connection_) {
+        connection_manager_.read_callbacks_->connection().close(Network::ConnectionCloseType::NoFlush);
+        request_info_.setResponseFlag(Http::AccessLog::ResponseFlag::NoHealthyUpstream);
+        HeaderMapImpl headers{{Headers::get().Status, std::to_string(enumToInt(Http::Code::ServiceUnavailable))}};
+        encodeHeaders(nullptr, headers, true);
+        return;
+      }
+
+      // need to set callbacks
+      // TODO: Create WsHandlerImpl
+      ASSERT(false);
+    } else if (isWsConnection || isWsRoute) {
+      if (isWsConnection) {
+        // Do not allow WebSocket upgrades if the route does not support it.
+        connection_manager_.stats_.named_.downstream_rq_ws_on_non_ws_route_.inc();
+      } else {
+        // Do not allow normal connections on WebSocket routes.
+        connection_manager_.stats_.named_.downstream_rq_non_ws_on_ws_route_.inc();
+      }
+      HeaderMapImpl headers{{Headers::get().Status, std::to_string(enumToInt(Code::BadRequest))}};
+      encodeHeaders(nullptr, headers, true);
+      return;
     }
-    HeaderMapImpl headers{{Headers::get().Status, std::to_string(enumToInt(Code::BadRequest))}};
-    encodeHeaders(nullptr, headers, true);
-    return;
   }
 
   ConnectionManagerUtility::mutateRequestHeaders(

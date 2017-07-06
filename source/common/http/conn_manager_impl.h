@@ -231,7 +231,8 @@ class ConnectionManagerImpl : Logger::Loggable<Logger::Id::http>,
 public:
   ConnectionManagerImpl(ConnectionManagerConfig& config, Network::DrainDecision& drain_close,
                         Runtime::RandomGenerator& random_generator, Tracing::HttpTracer& tracer,
-                        Runtime::Loader& runtime, const LocalInfo::LocalInfo& local_info);
+                        Runtime::Loader& runtime, const LocalInfo::LocalInfo& local_info,
+                        Upstream::ClusterManager& cm);
   ~ConnectionManagerImpl();
 
   static ConnectionManagerStats generateStats(const std::string& prefix, Stats::Scope& scope);
@@ -501,12 +502,15 @@ private:
   Network::DrainDecision& drain_close_;
   DrainState drain_state_{DrainState::NotDraining};
   UserAgent user_agent_;
+  bool websocket_; // Allows us to drop in WsHandler in onData
   Event::TimerPtr idle_timer_;
   Event::TimerPtr drain_timer_;
   Runtime::RandomGenerator& random_generator_;
   Tracing::HttpTracer& tracer_;
   Runtime::Loader& runtime_;
   const LocalInfo::LocalInfo& local_info_;
+  Upstream::ClusterManager& cm_;
+  Network::ClientConnectionPtr ws_connection_;
   Network::ReadFilterCallbacks* read_callbacks_{};
 };
 

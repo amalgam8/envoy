@@ -328,12 +328,12 @@ RouteConstSharedPtr RouteEntryImplBase::clusterEntry(const Http::HeaderMap& head
       const Http::HeaderEntry* entry = headers.get(cluster_header_name_);
       std::string final_cluster_name;
       if (entry) {
-        final_cluster_name = entry->value().c_str();
         // extract the cluster name from the specified URL param
         if (!cluster_url_param_.empty()) {
           final_cluster_name = urlParamValue(entry->value().c_str(), cluster_url_param_);
-          ASSERT(!final_cluster_name.empty());
-        }
+        } else {
+	  final_cluster_name = entry->value().c_str();
+	}
       }
 
       // NOTE: Though we return a shared_ptr here, the current ownership model assumes that

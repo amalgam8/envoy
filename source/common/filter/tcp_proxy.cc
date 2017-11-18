@@ -102,6 +102,8 @@ TcpProxy::TcpProxy(TcpProxyConfigSharedPtr config, Upstream::ClusterManager& clu
       upstream_callbacks_(new UpstreamCallbacks(*this)) {}
 
 TcpProxy::~TcpProxy() {
+  ASSERT(!delay_timer_);
+
   if (config_ != nullptr) {
     for (const auto& access_log : config_->accessLogs()) {
       access_log->log(nullptr, nullptr, request_info_);
@@ -287,13 +289,19 @@ Network::FilterStatus TcpProxy::onData(Buffer::Instance& data) {
 
 void TcpProxy::onDownstreamEvent(Network::ConnectionEvent event) {
   if ((event == Network::ConnectionEvent::RemoteClose ||
-       event == Network::ConnectionEvent::LocalClose) &&
-      upstream_connection_) {
-    // TODO(mattklein123): If we close without flushing here we may drop some data. The downstream
-    // connection is about to go away. So to support this we need to either have a way for the
-    // downstream connection to stick around, or, we need to be able to pass this connection to a
-    // flush worker which will attempt to flush the remaining data with a timeout.
-    upstream_connection_->close(Network::ConnectionCloseType::NoFlush);
+       event == Network::ConnectionEvent::LocalClose)) {
+    if (delay_timer_) {
+      delay_timer_->disableTimer();
+      delay_timer_.reset();
+    }
+
+    if (upstream_connection_) {
+      // TODO(mattklein123): If we close without flushing here we may drop some data. The downstream
+      // connection is about to go away. So to support this we need to either have a way for the
+      // downstream connection to stick around, or, we need to be able to pass this connection to a
+      // flush worker which will attempt to flush the remaining data with a timeout.
+      upstream_connection_->close(Network::ConnectionCloseType::NoFlush);
+    }
   }
 }
 
@@ -323,6 +331,53 @@ void TcpProxy::onUpstreamEvent(Network::ConnectionEvent event) {
   if (connect_timeout_timer_) {
     connect_timeout_timer_->disableTimer();
     connect_timeout_timer_.reset();
+  }
+}
+
+Optional<uint64_t> TcpProxy::delayDuration() {
+  Optional<uint64_t> result;
+
+  if (!fault_config_) {
+    return result;
+  }
+
+  if (!runtime_.snapshot().featureEnabled(MongoRuntimeConfig::get().FixedDelayPercent,
+                                          fault_config_->delayPercent())) {
+    return result;
+  }
+
+  const uint64_t duration = runtime_.snapshot().getInteger(
+      MongoRuntimeConfig::get().FixedDelayDurationMs, fault_config_->delayDuration());
+
+  // Delay only if the duration is > 0ms.
+  if (duration > 0) {
+    result.value(duration);
+  }
+
+  return result;
+}
+
+void TcpProxy::delayInjectionTimerCallback() {
+  delay_timer_.reset();
+
+  // Continue request processing.
+  read_callbacks_->continueReading();
+}
+
+void TcpProxy::tryInjectDelay() {
+  // Do not try to inject delays if there is an active delay.
+  // Make sure to capture stats for the request otherwise.
+  if (delay_timer_) {
+    return;
+  }
+
+  const Optional<uint64_t> delay_ms = delayDuration();
+
+  if (delay_ms.valid()) {
+    delay_timer_ = read_callbacks_->connection().dispatcher().createTimer(
+        [this]() -> void { delayInjectionTimerCallback(); });
+    delay_timer_->enableTimer(std::chrono::milliseconds(delay_ms.value()));
+    stats_.delays_injected_.inc();
   }
 }
 
